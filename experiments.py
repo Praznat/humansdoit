@@ -184,7 +184,7 @@ class Experiment():
     def train(self, use_diff=0, use_disc=1, dim_size=8, iter=500, **kwargs):
         if self.stan_data is None:
             raise ValueError("Must setup stan_data first")
-        stan_model = utils.stanmodel("distance5", overwrite=False)
+        stan_model = utils.stanmodel("mas", overwrite=False)
         self.stan_data["use_diff"] = use_diff
         self.stan_data["use_disc"] = use_disc
         self.stan_data["use_norm"] = 1
