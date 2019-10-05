@@ -37,17 +37,22 @@ def create_user_data(uid, df, pct_items, u_err, difficulty_dict=None, extraarg=N
     sentenceIds = []
     parser = np.random.choice(extraarg)
     for row_i in rows_chosen:
-        sentenceId, sentence, tokens = df.iloc[row_i]
+        sentenceId, sentence, tokens, parse_scores, parses = df.iloc[row_i]
         sentences_parsed.append(sentence)
         sentenceIds.append(sentenceId)
-        parses = list(parser.parse(ParsableStr(tokens, is_tokenized=True)))
-        best_parse = parses[0]
-        parses = sorted(parses, key=lambda x: evalb(x, best_parse), reverse=True)
+        # # parses = list(parser.parse(ParsableStr(tokens, is_tokenized=True)))
+        # best_parse = parses[0]
+        # parses = sorted(parses, key=lambda x: evalb(x, best_parse), reverse=True)
         i_difficulty = difficulty_dict.get(sentenceId) if difficulty_dict else 0
-        p = 1 - (1 - u_err) * (1 - i_difficulty)
-        for i, chosen_parse in enumerate(parses[::3]):
-            if np.random.uniform() > p:
-                break
+
+        target_score = (1 - u_err) * (1 - i_difficulty)
+        target_i = (np.abs(parse_scores - target_score)).argmin()
+        chosen_parse = parses[target_i]
+
+        # p = 1 - (1 - u_err) * (1 - i_difficulty)
+        # for i, chosen_parse in enumerate(parses[::3]):
+        #     if np.random.uniform() > p:
+        #         break
         chosen_parses.append(chosen_parse)
     dfdict = {
         "uid": [uid] * n_sentences_parsed,
@@ -65,7 +70,21 @@ class ParserSimulator(simulation.Simulator):
         self.bllip = bllipparser
         self.parsers = [bllipparser]
         # self.parsers.append(malt.MaltParser('maltparser-1.9.2', 'maltparser-1.9.2/engmalt.linear-1.7.mco'))
-    
+        parser = self.parsers[0]
+        df_parse_scores = []
+        df_parses = []
+        for i, row in self.df.iterrows():
+            sentenceId, sentence, tokens = row
+            parses = list(parser.parse(ParsableStr(tokens, is_tokenized=True)))
+            best_parse = parses[0]
+            scores = []
+            for parse in parses:
+                scores.append(evalb(parse, best_parse))
+            df_parse_scores.append(scores)
+            df_parses.append(parses)
+        self.df["parse_scores"] = df_parse_scores
+        self.df["parses"] = df_parses
+
     def create_stan_data(self, n_users, pct_items, err_rates, difficulty_dict):
         self.err_rates = err_rates
         self.difficulty_dict = difficulty_dict

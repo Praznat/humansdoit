@@ -4,26 +4,33 @@ from scipy.stats import kendalltau
 import simulation
 import utils
 
+NOISE = 0.01
+TOPK = 25
+
 def intersectscore(r1, r2):
     s1 = set(r1)
     s2 = set(r2)
     return len(s1.intersection(s2)) / len(s1.union(s2))
 
 def kendaltauscore(r1, r2):
-    rfact = pd.factorize(list(set(r1).union(set(r2))))
+    rfact = pd.factorize(list(set(r1[:TOPK]).union(set(r2[:TOPK]))))
     rfact = zip(rfact[1], rfact[0])
     rfact = dict(rfact)
+    # print(r1[:5], r2[:5])
+    # print(rfact)
     depth = len(rfact) + 50
     r1v = len(rfact) * np.ones(depth)
     r2v = len(rfact) * np.ones(depth)
-    for i in range(10):
+    for i in range(min([TOPK, len(r1), len(r2)])):
         r1v[rfact[r1[i]]] = i
         r2v[rfact[r2[i]]] = i
+        # print(r1[i], rfact[r1[i]], r2[i], rfact[r2[i]])
     r1v = r1v.astype(int)
     r2v = r2v.astype(int)
-    return np.log(1.1 + kendalltau(r1v, r2v).correlation)
+    # print(r1v[:5], r2v[:5], kendalltau(r1v, r2v).correlation)
+    return kendalltau(r1v, r2v).correlation
 
-def create_user_data(uid, df, pct_topics, u_err, difficulty_dict=None, topK=10, ambiguity=0.5, extraarg=None):
+def create_user_data(uid, df, pct_topics, u_err, difficulty_dict=None, extraarg=None):
     items = df.topic_item.unique()
     n_items_rated = int(np.round(pct_topics * len(items)))
     items_rated = sorted(np.random.choice(items, n_items_rated, replace=False))
@@ -31,11 +38,16 @@ def create_user_data(uid, df, pct_topics, u_err, difficulty_dict=None, topK=10, 
     for item in items_rated:
         idf = df[df.topic_item == item]
         idflen = len(idf)
-        ratings = idf.gold + (1 - ambiguity) * np.random.normal(0, u_err, idflen)
+        # err_mu = u_err
+        err_mu = np.random.normal(0, u_err, idflen)
         if difficulty_dict is not None:
             i_difficulty = difficulty_dict.get(item)
-            ratings += ambiguity * np.random.normal(0, i_difficulty, idflen)
-        top_docs = np.array(idf.doc)[np.argsort(-ratings)][:topK]
+            err_mu *= np.exp(np.random.normal(i_difficulty, NOISE, idflen))
+            # err_mu += i_difficulty
+        # err_mu *= (1 if np.random.random() < 0.5 else -1)
+        # print("***", err_mu[:10])
+        ratings = idf.gold + err_mu#np.random.normal(err_mu, NOISE, idflen)
+        top_docs = np.array(idf.doc)[np.argsort(-ratings)][:TOPK]
         rankings.append(top_docs)
     dfdict = {
         "uid": [uid] * len(items_rated),
@@ -45,7 +57,7 @@ def create_user_data(uid, df, pct_topics, u_err, difficulty_dict=None, topK=10, 
     return pd.DataFrame(dfdict)
 
 class RankerSimulator(simulation.Simulator):
-    def __init__(self, rawdata_dir, max_docs_per_item=50, gold_sterr=0.1, n_items=0):
+    def __init__(self, rawdata_dir, max_docs_per_item=50, gold_sterr=0.5, n_items=0):
         self.df = pd.read_csv(rawdata_dir, sep=" ", error_bad_lines=False,
                             names=["topic_item", "na", "doc", "gold"])
         self.df = self.df[self.df.na == 0]

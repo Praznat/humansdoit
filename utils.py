@@ -24,14 +24,15 @@ def stanmodel(modelname, overwrite):
             pickle.dump(stan_model, f)
     return stan_model
 
-def make_categorical(df, colname):
+def make_categorical(df, colname, overwrite=True):
     orig = df[colname].values
-    df[colname] = pd.Categorical(df[colname]).codes
+    if overwrite:
+        df[colname] = pd.Categorical(df[colname]).codes
     return dict(zip(orig, df[colname]))
 
 def translate_categorical(df, colname, coldict, drop_missing=True):
     df[colname] = np.array([coldict.get(i) for i in df[colname].dropna().values])
-    result = df[df[colname] >= 0]
+    result = df[df[colname] >= 0].copy()
     result[colname] = result[colname].astype(int)
     return result
 
@@ -94,7 +95,7 @@ def calc_distances(df, compare_fn, label_colname, item_colname, uid_colname="uid
     stan_data["gold_user_err"] = 0
     return stan_data
 
-def visualize_embeddings(stan_data, opt):
+def visualize_embeddings(stan_data, opt, sim_df=None, preds={}):
     from sklearn.decomposition import PCA
     def userset(data):
         result = set(data["u1s"]).union(set(data["u2s"]))
@@ -108,14 +109,19 @@ def visualize_embeddings(stan_data, opt):
         dist_from_truth = opt["dist_from_truth"][i]
         print("item", str(i+1))
         print(sddf[sddf["items"]==i+1][["u1s", "u2s", "distances"]])
-        embeddings = PCA(n_components=2).fit_transform([iue[u-1] for u in users])
+        if len(iue[0]) > 2:
+            embeddings = PCA(n_components=2).fit_transform(iue)
+        embeddings = np.array([embeddings[u-1] for u in users])
         dists = [dist_from_truth[u-1] for u in users]
         skills = [opt["uerr"][u-1] for u in users]
-        scale = np.abs(np.max(embeddings))
+        scale = np.max(np.abs(embeddings)) * 1.05
         plt.scatter(embeddings[:,0], embeddings[:,1])
         for ui, emb in enumerate(embeddings):
             plt.plot([0,emb[0]], [0,emb[1]], "b")
             plt.annotate(str(list(users)[ui]) + ":" + str(np.round(dists[ui],2)) + ":" + str(np.round(skills[ui],2)), emb)
+        if sim_df is not None:
+            preds.get(i)
+            sim_df[sim_df.topic_item==0]
         plt.xlim(-scale, scale)
         plt.ylim(-scale, scale)
         plt.show()

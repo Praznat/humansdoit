@@ -54,7 +54,7 @@ class Simulator():
     def create_stan_data_scenario(self, n_users=10, pct_items=0.5,
                                     uerr_a=3, uerr_b=5,
                                     difficulty_a=5, difficulty_b=20,
-                                    n_gold_users=0, gold_user_err=0.1):
+                                    n_gold_users=0, gold_user_err=-5):
         err_rates = self.sim_uerr_fn(uerr_a, uerr_b, n_users)
         err_rates[:n_gold_users] = gold_user_err # first n_gold assumed to be gold
         difficulty_dict = self.sim_diff_fn(difficulty_a, difficulty_b)

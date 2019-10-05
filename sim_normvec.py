@@ -3,6 +3,8 @@ import pandas as pd
 import simulation
 import utils
 
+STD_ERR = 0.001
+
 def euclidist(v1, v2):
     return np.linalg.norm(v1 - v2)
 
@@ -13,10 +15,15 @@ def create_user_data(uid, df, pct_items, u_err, difficulty_dict=None, extraarg=N
     labels = []
     for item in items_labeled:
         idf = df[df.topic_item == item]
-        label = idf.gold.values[0] + np.random.normal(0, u_err, len(idf.gold))
+        idflen = len(idf.gold.values[0])
+        err = np.random.normal(0, u_err, idflen)
+        # err = np.random.normal(u_err, STD_ERR, idflen)
         if difficulty_dict is not None:
             i_difficulty = difficulty_dict.get(item)
-            label += np.random.normal(0, i_difficulty, len(idf.gold))
+            # err *= np.abs(np.random.normal(0, i_difficulty, idflen))
+            err += np.random.normal(0, i_difficulty, idflen)
+            # err *= np.random.normal(i_difficulty, STD_ERR, idflen)
+        label = idf.gold.values[0] + err
         labels.append(label)
     dfdict = {
         "uid": [uid] * len(items_labeled),

@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
@@ -63,15 +64,32 @@ def scatter_corr(pred_vals, true_vals, jitter=False, title=None, log=False):
     plt.show()
     print(np.corrcoef(pred_vals, true_vals))
 
-def pred_item(df, pred_uerr, label_colname, item_colname, uid_name="uid"):
-    df["pred_uerr"] = pred_uerr[df[uid_name].values]
+def diagnostics(opt, stan_data):
+    plt.scatter(opt["pred_distances"], stan_data["distances"])
+    plt.xlabel("pred_distances")
+    plt.ylabel("distances")
+    plt.show()
+    uerr_b = uerr_baseline(stan_data)
+    plt.scatter(opt["uerr"], uerr_b)
+    plt.xlabel("inferred uerr")
+    plt.ylabel("avg user distance")
+    plt.show()
+    # plt.title("uerr")
+    # plt.hist(opt["uerr"])
+    # plt.show()
+    # plt.title("diff")
+    # plt.hist(opt["diff"])
+    # plt.show()
+
+def pred_item(df, pred_uerr, label_colname, item_colname, uid_colname="uid"):
+    df["pred_uerr"] = pred_uerr[df[uid_colname].values]
     def pickbybestuser(data):
         best_i = np.argmin(data["pred_uerr"].values)
         return data[label_colname].values[best_i]
     return df.groupby(item_colname).apply(pickbybestuser)
 
-def pred_item_agg_exclude(df, pred_uerr, label_name, itemId_name, uid_name="uid", uerr_thresh_pctile=0.9):
-    df["pred_uerr"] = pred_uerr[df[uid_name].values]
+def pred_item_agg_exclude(df, pred_uerr, label_name, itemId_name, uid_colname="uid", uerr_thresh_pctile=0.9):
+    df["pred_uerr"] = pred_uerr[df[uid_colname].values]
     err_thresh = np.quantile(pred_uerr, uerr_thresh_pctile)
     def mean_exclude(data):
         okdata = data[data["pred_uerr"] <= err_thresh]
@@ -91,54 +109,54 @@ def get_model_user_rankings(opt, debug=False):
         plt.show()
     return result
 
-def get_baseline_random(sim_df, label_colname, item_colname):
+def get_baseline_random(annodf, label_colname, item_colname):
     def pickrandomlabel(data):
         return data.sample(1)[label_colname].values[0]
-    return dict(sim_df.groupby(item_colname).apply(pickrandomlabel))
+    return dict(annodf.groupby(item_colname).apply(pickrandomlabel))
 
-def get_baseline_global_best_user(stan_data, sim_df, label_colname, item_colname, uid_colname="uid"):
+def get_baseline_global_best_user(stan_data, annodf, label_colname, item_colname, uid_colname="uid"):
     uerrs = uerr_baseline(stan_data).values
-    return dict(pred_item(sim_df, uerrs, label_colname, item_colname, uid_colname))
+    return dict(pred_item(annodf, uerrs, label_colname, item_colname, uid_colname))
 
-def get_baseline_item_centrallest(stan_data, sim_df, label_colname, item_colname, uid_colname="uid",
+def get_baseline_item_centrallest(stan_data, annodf, label_colname, item_colname, uid_colname="uid",
                                     agg_fn=None):
     sddf = pd.DataFrame(stan_data)
     preds = {}
-    for i0 in sorted(sim_df[item_colname].unique()):
+    for i0 in sorted(annodf[item_colname].unique()):
         i = i0 + 1
         iddf = sddf[sddf["items"] == i]
         if iddf.empty:
-            idf = sim_df[sim_df[item_colname] == i0]
+            idf = annodf[annodf[item_colname] == i0]
             pred = idf[label_colname].values[0]
         else:
             uerrs = uerr_baseline(iddf)
-            i_sim_df = sim_df[sim_df[item_colname] == i-1]
+            i_annodf = annodf[annodf[item_colname] == i-1]
             if agg_fn is None:
                 best_user = uerrs.idxmin()
-                pred = i_sim_df[i_sim_df[uid_colname] == best_user-1][label_colname].values[0]
+                pred = i_annodf[i_annodf[uid_colname] == best_user-1][label_colname].values[0]
             else:
-                pred = agg_fn(i_sim_df, uerrs)
+                pred = agg_fn(i_annodf, uerrs)
         preds[i-1] = pred
     return preds
 
-def get_oracle_preds(stan_data, sim_df, label_colname, item_colname, uid_colname="uid",
+def get_oracle_preds(stan_data, annodf, label_colname, item_colname, uid_colname="uid",
                     eval_fn=None, gold_dict={}):
     if eval_fn is None:
         raise ValueError("Need a evaluation function to compute oracle")
-    def agg_fn(i_sim_df, uerrs):
-        item = i_sim_df[item_colname].values[0]
+    def agg_fn(i_annodf, uerrs):
+        item = i_annodf[item_colname].values[0]
         gold = gold_dict.get(item)
         if gold is None:
-            return i_sim_df[label_colname].values[0]
-        evals = [eval_fn(gold, label) for label in i_sim_df[label_colname].values]
-        pred = i_sim_df[label_colname].values[np.argmax(evals)]
+            return i_annodf[label_colname].values[0]
+        evals = [eval_fn(gold, label) for label in i_annodf[label_colname].values]
+        pred = i_annodf[label_colname].values[np.argmax(evals)]
         return pred
-    return get_baseline_item_centrallest(stan_data, sim_df, label_colname, item_colname, uid_colname, agg_fn)
+    return get_baseline_item_centrallest(stan_data, annodf, label_colname, item_colname, uid_colname, agg_fn)
 
-def get_preds(sim_df, per_item_user_rankings, label_colname, item_colname, user_colname="uid"):
+def get_preds(annodf, per_item_user_rankings, label_colname, item_colname, user_colname="uid"):
     preds = {}
-    for i, item in enumerate(sorted(sim_df[item_colname].unique())):
-        idf = sim_df[sim_df[item_colname] == item]
+    for i, item in enumerate(sorted(annodf[item_colname].unique())):
+        idf = annodf[annodf[item_colname] == item]
         pred = None
         for best_user in per_item_user_rankings[i]:
             uidf = idf[idf[user_colname]==best_user]
@@ -173,14 +191,16 @@ def eval_preds_vs(baseline_preds, model_preds, golds, eval_fn, print_diffs=False
     return baseline_scores, model_scores
 
 class Experiment():
-    def __init__(self, label_colname, item_colname, uid_name="uid"):
+    def __init__(self, label_colname, item_colname, uid_colname="uid"):
         self.label_colname = label_colname
         self.item_colname = item_colname
-        self.uid_name = uid_name
+        self.uid_colname = uid_colname
         self.stan_data = None
         self.opt = None
         self.simulator = None
+        self.annodf = None
         self.badness_threshold = 0
+
     def train(self, use_diff=0, use_disc=1, dim_size=8, iter=500, **kwargs):
         if self.stan_data is None:
             raise ValueError("Must setup stan_data first")
@@ -188,12 +208,13 @@ class Experiment():
         self.stan_data["use_diff"] = use_diff
         self.stan_data["use_disc"] = use_disc
         self.stan_data["use_norm"] = 1
-        self.stan_data["norm_ratio"] = 0.5
+        self.stan_data["norm_ratio"] = 1
         self.stan_data["DIM_SIZE"] = dim_size
-        self.stan_data["eps_limit"] = 1
+        self.stan_data["eps_limit"] = 3
         self.stan_data["uerr_prior_scale"] = 1
         self.stan_data["diff_prior_scale"] = 1
         self.stan_data["disc_prior_scale"] = 1
+        self.stan_data["err_scale"] = 0.1
         self.stan_data = {**self.stan_data, **kwargs}
         self.opt = stan_model.optimizing(data=self.stan_data, verbose=True, iter=iter)
         print("sigma", self.opt["sigma"])
@@ -202,37 +223,174 @@ class Experiment():
         model_scores = eval_preds(model_preds, self.golddict, self.eval_fn)
         model_scores *= num_samples
         eval_scores_vs(random_scores, model_scores, self.badness_threshold)
-        print("NUSERS", "NITEMS", "")
 
-    def test(self, num_samples=5, debug=False):
-        if self.simulator is None:
-            raise ValueError("Must create simulator first")
+    def test(self, num_samples=5, debug=False, **kwargs):
+        if self.simulator is not None:
+            self.annodf = self.simulator.sim_df
+        if self.annodf is None:
+            raise ValueError("Must set annodf or create simulator")
         if self.opt is None:
             raise ValueError("Must train model first")
         per_item_user_rankings = get_model_user_rankings(self.opt, debug=debug)
         # TODO repeat random several times!
         random_scores = []
         for i in range(num_samples):
-            random_preds = get_baseline_random(self.simulator.sim_df, self.label_colname, self.item_colname)
+            random_preds = get_baseline_random(self.annodf, self.label_colname, self.item_colname)
             random_scores += eval_preds(random_preds, self.golddict, self.eval_fn)
-        self.faveu_preds = get_baseline_global_best_user(self.stan_data, self.simulator.sim_df, self.label_colname, self.item_colname, self.uid_name)
-        self.center_preds = get_baseline_item_centrallest(self.stan_data, self.simulator.sim_df, self.label_colname, self.item_colname, self.uid_name)
-        self.model_preds = get_preds(self.simulator.sim_df, per_item_user_rankings, self.label_colname, self.item_colname, self.uid_name)
-        self.oracle_preds = get_oracle_preds(self.stan_data, self.simulator.sim_df, self.label_colname, self.item_colname, self.uid_name, self.eval_fn, self.golddict)
-        self.eval_model(random_scores, self.faveu_preds, "FAVORITE USER", num_samples)
-        self.eval_model(random_scores, self.center_preds, "SMALLEST DISTANCE", num_samples)
-        self.eval_model(random_scores, self.model_preds, "MULTIVARIATE SCALING", num_samples)
+        self.bau_preds = get_baseline_global_best_user(self.stan_data, self.annodf, self.label_colname, self.item_colname, self.uid_colname)
+        self.sad_preds = get_baseline_item_centrallest(self.stan_data, self.annodf, self.label_colname, self.item_colname, self.uid_colname)
+        self.mas_preds = get_preds(self.annodf, per_item_user_rankings, self.label_colname, self.item_colname, self.uid_colname)
+        self.oracle_preds = get_oracle_preds(self.stan_data, self.annodf, self.label_colname, self.item_colname, self.uid_colname, self.eval_fn, self.golddict)
+        self.eval_model(random_scores, self.bau_preds, "BEST AVAILABLE USER", num_samples)
+        self.eval_model(random_scores, self.sad_preds, "SMALLEST AVERAGE DISTANCE", num_samples)
+        self.eval_model(random_scores, self.mas_preds, "MULTIDIMENSIONAL ANNOTATION SCALING", num_samples)
         self.eval_model(random_scores, self.oracle_preds, "ORACLE", num_samples)
         if debug:
-            params_model(self.simulator, self.opt, self.stan_data)
+            if kwargs.get("diagnose_vs_sim") and self.simulator is not None:
+                params_model(self.simulator, self.opt, self.stan_data)
+            else:
+                diagnostics(self.opt, self.stan_data)
+
+    def debug(self, plot_stress=False, plot_vs_sad=False, plot_vs_gold=False):
+        from sklearn.decomposition import PCA
+        def userset(data):
+            result = set(data["u1s"]).union(set(data["u2s"]))
+            return result
+        sddf = pd.DataFrame(self.stan_data)
+        item_userset = sddf.groupby("items").apply(userset)
+        map_corrs = []
+        map_scores_all = []
+        sad_corrs = []
+        sad_scores_all = []
+        gold_scores_all = []
+        for i, iue in enumerate(self.opt["item_user_errors"]):
+            users = item_userset.get(i+1)
+            if users is None or len(users) < 3:
+                continue
+            dist_from_truth = self.opt["dist_from_truth"][i]
+            print("item", str(i+1))
+            iu_distances = sddf[sddf["items"]==i+1][["u1s", "u2s", "distances"]]
+            print(iu_distances)
+            sad = uerr_baseline(iu_distances)
+            sad_scores = [sad.loc[u] for u in users]
+            # if len(iue[0]) > 2:
+            #     all_embeddings = PCA(n_components=2).fit_transform(iue)
+            # embeddings = np.array([all_embeddings[u-1] for u in users])
+            embeddings = np.array([iue[u-1] for u in users])
+            if len(embeddings[0]) > 2:
+                embeddings = PCA(n_components=2).fit_transform(embeddings)
+            map_scores = [dist_from_truth[u-1] for u in users]
+            skills = [self.opt["uerr"][u-1] for u in users]
+            scale = np.max(np.abs(embeddings)) * 1.05
+            
+            # plot preds
+            idf = self.annodf[self.annodf[self.item_colname]==i]
+
+            if plot_vs_gold:
+                labels = [idf[idf[self.uid_colname] == [u-1]][self.label_colname].values[0] for u in users]
+                gold = self.golddict.get(i)
+                if gold is not None:
+                    gold_scores = [self.eval_fn(gold, label) for label in labels]
+                else:
+                    continue
+                    gold_scores = np.nan * np.zeros(len(labels))
+                plt.scatter(map_scores, gold_scores)
+                plt.scatter(sad_scores, gold_scores, color="red")
+                plt.show()
+                try:
+                    map_corrs.append(np.corrcoef(map_scores, gold_scores)[0,1])
+                    sad_corrs.append(np.corrcoef(sad_scores, gold_scores)[0,1])
+                    map_scores_all += map_scores
+                    sad_scores_all += sad_scores
+                    gold_scores_all += gold_scores
+                except:
+                    pass
+
+            # plot stress
+            if plot_stress:
+                for _, row in iu_distances.iterrows():
+                    u1, u2 = (int(row["u1s"]-1), int(row["u2s"]-1))
+                    u1emb = embeddings[np.where(u1+1==np.array(list(users)))]
+                    u2emb = embeddings[np.where(u2+1==np.array(list(users)))]
+                    embs = np.concatenate((u1emb, u2emb)).T
+                    stress = row["distances"] - np.linalg.norm(iue[u1] - iue[u2])
+                    cmap = plt.cm.Reds if stress > 0 else plt.cm.Greens
+                    plt.plot(embs[0], embs[1], color=cmap(10*stress))
+
+            # plt.scatter(embeddings[:,0], embeddings[:,1])
+            for ui, emb in enumerate(embeddings):
+                plt.plot([0,emb[0]], [0,emb[1]], "b-")
+                if plot_vs_gold:
+                    pltanno = str(np.round(gold_scores[ui],2))
+                else:
+                    pltanno = str(list(users)[ui]) + ":" + str(np.round(map_scores[ui],2)) + ":" + str(np.round(skills[ui],2))
+                plt.annotate(pltanno, emb)
+
+            def plot_pred(preds, marker, color, size=50):
+                this_pred = preds.get(i)
+                this_uid = idf[[np.array_equal(v, this_pred) for v in idf[self.label_colname]]][self.uid_colname].values[0]
+                this_ui = np.where(np.array([u-1 for u in users]) == this_uid)[0][0]
+                this_emb = embeddings[this_ui]
+                plt.scatter([this_emb[0]], [this_emb[1]], marker=marker, c=color, s=size)
+            plot_pred(self.oracle_preds, "o", "gold", 100)
+            plot_pred(self.mas_preds, "d", "red")
+            plot_pred(self.bau_preds, "+", "black")
+            plot_pred(self.sad_preds, "x", "black")
+
+            plt.xlim(-scale, scale)
+            plt.ylim(-scale, scale)
+            plt.show()
+
+            if plot_vs_sad:
+                plt.scatter(map_scores, sad_scores)
+                plt.show()
+                print("SAD vs MAS: ", self.sad_preds.get(i), self.mas_preds.get(i))
         
-        # print("SMALLEST DISTANCE")
-        # scores_sd = eval_preds(random, center, self.golddict, eval_fn=self.eval_fn, badness_threshold=self.badness_threshold, baseline_n_times=10)
-        # print("MULTIVARIATE SCALING")
-        # scores_ms = eval_preds(random, model4, self.golddict, eval_fn=self.eval_fn, badness_threshold=self.badness_threshold, baseline_n_times=10)
-        # print("ORACLE")
-        # scores_or = eval_preds(random, oracle, self.golddict, eval_fn=self.eval_fn, badness_threshold=self.badness_threshold, baseline_n_times=10)
+        if plot_vs_gold:
+            plt.hist(sad_corrs)
+            plt.show()
+            print("sad", np.mean(sad_corrs))
+            plt.hist(map_corrs)
+            plt.show()
+            print("map", np.mean(map_corrs))
+            plt.scatter(map_scores_all, gold_scores_all)
+            plt.scatter(sad_scores_all, gold_scores_all, color="r")
+            plt.show()
+            print("\n ALL")
+            print("sad", np.corrcoef(sad_scores_all, gold_scores_all)[0,1])
+            print("map", np.corrcoef(map_scores_all, gold_scores_all)[0,1])
     
+    def run_square(self, squaredir="square-2.0/"):
+        if self.annodf is None:
+            if self.simulator is None:
+                raise ValueError("Must set annodf or create simulator")
+            else:
+                self.annodf = self.simulator.sim_df
+        outdir = squaredir + "data/test/"
+        cats = pd.Categorical(map(str, self.annodf[self.label_colname])).codes
+        cat_lookup = dict(zip(cats, self.annodf[self.label_colname]))
+        self.annodf["cat"] = cats
+        catdf = pd.DataFrame(np.unique(cats))
+        catdf.iloc[:-1].to_csv(outdir + "categories.txt", header=False, index=False, sep=" ")
+        catdf.iloc[-1:].to_csv(outdir + "categories.txt", header=False, index=False, sep=" ", mode='a', line_terminator="")
+        respdf = self.annodf[[self.uid_colname, self.item_colname, "cat"]]
+        respdf.iloc[:-1].to_csv(outdir + "responses.txt", header=False, index=False, sep=" ")
+        respdf.iloc[-1:].to_csv(outdir + "responses.txt", header=False, index=False, sep=" ", mode='a', line_terminator="")
+
+def run_square(annodf, uid_colname, item_colname, label_colname, squaredir="square-2.0/"):
+    outdir = squaredir + "data/test/"
+    cats = pd.Categorical(map(str, annodf[label_colname])).codes
+    cat_lookup = dict(zip(cats, annodf[label_colname]))
+    annodf["cat"] = cats
+    catdf = pd.DataFrame(np.unique(cats))
+    catdf.iloc[:-1].to_csv(outdir + "categories.txt", header=False, index=False, sep=" ")
+    catdf.iloc[-1:].to_csv(outdir + "categories.txt", header=False, index=False, sep=" ", mode='a', line_terminator="")
+    respdf = annodf[[uid_colname, item_colname, "cat"]]
+    respdf.iloc[:-1].to_csv(outdir + "responses.txt", header=False, index=False, sep=" ")
+    respdf.iloc[-1:].to_csv(outdir + "responses.txt", header=False, index=False, sep=" ", mode='a', line_terminator="")
+
+        # --responses ./data/test/responses.txt --category ./data/test/categories.txt --method Zen --estimation unsupervised --saveDir ./inferredGold/test/
+
 class ParserExperiment(Experiment):
     def __init__(self):
         super().__init__("parse", "sentenceId")
@@ -243,7 +401,7 @@ class ParserExperiment(Experiment):
         self.eval_fn = evalb
         self.badness_threshold = 0.9
 
-    def setup(self, num_items, n_users, pct_items, uerr_a, uerr_b, difficulty_a=1, difficulty_b=1,
+    def setup(self, num_items, n_users, pct_items, uerr_a=1, uerr_b=4, difficulty_a=1, difficulty_b=100,
                     ngoldu=0, min_sentence_length=10):
         from nltk.corpus import brown as browncorpus
         sentences = np.random.choice(browncorpus.sents(), num_items * 3, replace=False)
@@ -257,26 +415,32 @@ class ParserExperiment(Experiment):
         gold_parses = [self.BLLIP.parse_one(ParsableStr(s)) for s in self.simulator.df.tokens.values]
         self.golddict = dict(enumerate(gold_parses))
 
-def setup_parser_manyusers_hiuerr(parser_experiment):
-    parser_experiment.setup(num_items=50, n_users=30, pct_items=0.2, uerr_a=2, uerr_b=2)
-    
-def setup_parser_fewusers_hiuerr(parser_experiment):
-    parser_experiment.setup(num_items=50, n_users=10, pct_items=0.6, uerr_a=2, uerr_b=2)
+def setup_parser_manyusers(parser_experiment):
+    parser_experiment.setup(num_items=50, n_users=30, pct_items=0.2)
 
-def setup_parser_manyusers_hiuerr_fewitems(parser_experiment):
-    parser_experiment.setup(num_items=25, n_users=30, pct_items=0.2, uerr_a=2, uerr_b=2)
-    
-def setup_parser_fewusers_hiuerr_fewitems(parser_experiment):
-    parser_experiment.setup(num_items=25, n_users=10, pct_items=0.6, uerr_a=2, uerr_b=2)
+def setup_parser_manyusers_hiuerr(parser_experiment):
+    parser_experiment.setup(num_items=50, n_users=30, pct_items=0.2, uerr_a=2, uerr_b=3)
 
 def setup_parser_manyusers_hiuerr_somegold(parser_experiment):
-    parser_experiment.setup(num_items=50, n_users=30, pct_items=0.2, uerr_a=2, uerr_b=2, ngoldu=3)
+    parser_experiment.setup(num_items=50, n_users=30, pct_items=0.2, uerr_a=2, uerr_b=3, ngoldu=5)
+    
+def setup_parser_fewusers(parser_experiment):
+    parser_experiment.setup(num_items=50, n_users=10, pct_items=0.6)
 
-def setup_parser_manyusers_hiuerr_fewitems_somegold(parser_experiment):
-    parser_experiment.setup(num_items=25, n_users=30, pct_items=0.2, uerr_a=2, uerr_b=2, ngoldu=3)
+def setup_parser_manyusers_fewitems(parser_experiment):
+    parser_experiment.setup(num_items=25, n_users=30, pct_items=0.2)
+    
+def setup_parser_fewusers_fewitems(parser_experiment):
+    parser_experiment.setup(num_items=25, n_users=10, pct_items=0.6)
+
+def setup_parser_manyusers_somegold(parser_experiment):
+    parser_experiment.setup(num_items=50, n_users=30, pct_items=0.2, ngoldu=3)
+
+def setup_parser_manyusers_fewitems_somegold(parser_experiment):
+    parser_experiment.setup(num_items=25, n_users=30, pct_items=0.2, ngoldu=3)
 
 def setup_parser_huge(parser_experiment):
-    parser_experiment.setup(num_items=150, n_users=30, pct_items=0.1, uerr_a=2, uerr_b=2)
+    parser_experiment.setup(num_items=150, n_users=30, pct_items=0.1)
 
 class RankerExperiment(Experiment):
     def __init__(self, base_dir="qrels.all.txt"):
@@ -291,25 +455,25 @@ class RankerExperiment(Experiment):
                                                     n_gold_users=ngoldu)
         self.golddict = self.simulator.gold.to_dict()
     def setup_standard(self):
-        self.setup(n_items=100, n_users=20, pct_items=0.2, uerr_a=-1.0, uerr_b=0.3, difficulty_a=-2.0, difficulty_b=1.3, ngoldu=0)
+        self.setup(n_items=100, n_users=20, pct_items=0.2, uerr_a=-1.0, uerr_b=0.8, difficulty_a=-2.0, difficulty_b=1.3, ngoldu=0)
 
 def setup_ranker_manyusers_hiuerr_lodiff(ranker_experiment):
-    ranker_experiment.setup(n_items=100, n_users=60, pct_items=0.2, uerr_a=-2, uerr_b=.5, difficulty_a=-3.0, difficulty_b=.1)
+    ranker_experiment.setup(n_items=100, n_users=30, pct_items=0.2, uerr_a=-1.5, uerr_b=.6, difficulty_a=-30.0, difficulty_b=.1)
     
 def setup_ranker_fewusers_hiuerr_lodiff(ranker_experiment):
-    ranker_experiment.setup(n_items=100, n_users=20, pct_items=0.6, uerr_a=-2, uerr_b=.5, difficulty_a=-3.0, difficulty_b=.1)
+    ranker_experiment.setup(n_items=100, n_users=10, pct_items=0.6, uerr_a=-2, uerr_b=.5, difficulty_a=-3.0, difficulty_b=.1)
 
 def setup_ranker_manyusers_hiuerr_HIdiff(ranker_experiment):
-    ranker_experiment.setup(n_items=100, n_users=60, pct_items=0.2, uerr_a=-2, uerr_b=.5, difficulty_a=-2.0, difficulty_b=.6)
+    ranker_experiment.setup(n_items=100, n_users=30, pct_items=0.2, uerr_a=-2, uerr_b=.5, difficulty_a=-2.0, difficulty_b=.6)
     
 def setup_ranker_fewusers_hiuerr_HIdiff(ranker_experiment):
-    ranker_experiment.setup(n_items=100, n_users=20, pct_items=0.6, uerr_a=-2, uerr_b=.5, difficulty_a=-2.0, difficulty_b=.6)
+    ranker_experiment.setup(n_items=100, n_users=10, pct_items=0.6, uerr_a=-2, uerr_b=.5, difficulty_a=-2.0, difficulty_b=.6)
 
 def setup_ranker_manyusers_hiuerr_lodiff_somegold(ranker_experiment):
-    ranker_experiment.setup(n_items=100, n_users=60, pct_items=0.2, uerr_a=-2, uerr_b=.5, difficulty_a=-3.0, difficulty_b=.1, ngoldu=6)
+    ranker_experiment.setup(n_items=100, n_users=30, pct_items=0.2, uerr_a=-2, uerr_b=.5, difficulty_a=-3.0, difficulty_b=.1, ngoldu=6)
 
 def setup_ranker_manyusers_hiuerr_HIdiff_somegold(ranker_experiment):
-    ranker_experiment.setup(n_items=100, n_users=60, pct_items=0.2, uerr_a=-2, uerr_b=.5, difficulty_a=-2.0, difficulty_b=.6, ngoldu=6)
+    ranker_experiment.setup(n_items=100, n_users=30, pct_items=0.2, uerr_a=-2, uerr_b=.5, difficulty_a=-2.0, difficulty_b=.6, ngoldu=6)
 
 
 # def setup_ranker_manyusers_hiuerr_lodiff(ranker_experiment):
@@ -338,5 +502,59 @@ class VectorExperiment(Experiment):
                                                     difficulty_a=difficulty_a, difficulty_b=difficulty_b)
         self.golddict = self.simulator.df.gold.to_dict()
 def setup_vector_standard(vector_experiment):
-    vector_experiment.setup(n_items=40, n_users=20, pct_items=0.2, uerr_a=-1.0, uerr_b=0.8,
-                            difficulty_a=-2.0, difficulty_b=.3, ngoldu=10)
+    vector_experiment.setup(n_items=100, n_users=50, pct_items=0.2, uerr_a=-1.0, uerr_b=0.8,
+                            difficulty_a=-2.0, difficulty_b=.3, ngoldu=0)
+
+class RealExperiment(Experiment):
+    def __init__(self, eval_fn, label_colname="label", item_colname="item", uid_colname="uid", distance_fn=None):
+        super().__init__(label_colname, item_colname, uid_colname)
+        self.eval_fn = eval_fn
+        self.distance_fn = distance_fn if distance_fn is not None else (lambda x,y: 1 - self.eval_fn(x, y))
+    def produce_stan_data(self):
+        self.stan_data = utils.calc_distances(self.annodf, self.distance_fn, label_colname=self.label_colname, item_colname=self.item_colname, uid_colname=self.uid_colname)
+    def setup(self, annodf, golddf, c_anno_uid=None, c_anno_item=None, c_anno_label=None, c_gold_item=None, c_gold_label=None):
+        renamey = lambda y: self.label_colname if "label" in y else self.item_colname if "item" in y else self.uid_colname if "uid" in y else "_"
+        localargs = locals()
+        colrename = {localargs[k]:renamey(k) for k in localargs if "c_" in k and localargs[k] is not None}
+        self.annodf = annodf[[c_anno_uid or self.uid_colname, c_anno_item or self.item_colname, c_anno_label or self.label_colname]]
+        self.annodf = self.annodf.dropna().copy().rename(columns=colrename)[[self.uid_colname, self.item_colname, self.label_colname]]
+        uiddict = utils.make_categorical(self.annodf, "uid")
+        itemdict = utils.make_categorical(self.annodf, "item")
+        golddf = golddf[[c_gold_item or self.item_colname, c_gold_label or self.label_colname]]
+        golddf = golddf.rename(columns=colrename)[[self.item_colname, self.label_colname]]
+        golddf = utils.translate_categorical(golddf, self.item_colname, itemdict)
+        self.golddict = golddf.set_index("item").to_dict()[self.label_colname]
+        self.produce_stan_data()
+    def set_supervised_labels(self, n_supervised_items, apply_fn=lambda x:x, model_gold_err=-4):
+        if n_supervised_items == 0:
+            self.produce_stan_data()
+            return
+        assert self.golddict is not None
+        self.supervised_items = np.random.choice(list(self.golddict.keys()), n_supervised_items, replace=False)
+        supervised_labels = [apply_fn(self.golddict.get(item)) for item in self.supervised_items]
+        supervised_df = pd.DataFrame({
+            self.uid_colname:np.zeros(n_supervised_items, dtype=int),
+            self.item_colname:self.supervised_items,
+            self.label_colname:supervised_labels
+            })
+        self.annodf = self.annodf.copy()
+        self.annodf[self.uid_colname] += 1
+        self.annodf = pd.concat([supervised_df, self.annodf], sort=True).sort_values(self.uid_colname)
+        self.produce_stan_data()
+        self.stan_data["n_gold_users"] = 1
+        self.stan_data["gold_user_err"] = model_gold_err
+        for item in self.supervised_items:
+            del self.golddict[item]
+
+class CategoricalExperiment(RealExperiment):
+    def __init__(self):
+        super().__init__(distance_fn=lambda x, y: (1 if x == y else 0))
+
+
+
+
+# STUFF TO DO
+
+"1. check that pooled uerr param MAS works same as SAD"
+"2. check that 100% gold users results in perfect oracle score"
+"3. visualize BAU, SAD, MAS, ORACLE points in 2D"

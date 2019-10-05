@@ -52,7 +52,8 @@ transformed parameters {
 
     matrix<lower=0>[NITEMS, NUSERS] dist_from_truth = rep_matrix(666, NITEMS, NUSERS);
 
-    for (u in 1:n_gold_users) uerr[u] = gold_user_err;
+    // for (u in 1:n_gold_users) uerr[u] = gold_user_err;
+    for (u in 1:n_gold_users) uerr[u] = exp(uerr_prior_loc + gold_user_err * uerr_prior_scale);
     for (i in 1:NITEMS) {
         for (u in 1:NUSERS) {
             vector[DIM_SIZE] epsilon;
