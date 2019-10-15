@@ -54,14 +54,16 @@ class Simulator():
     def create_stan_data_scenario(self, n_users=10, pct_items=0.5,
                                     uerr_a=3, uerr_b=5,
                                     difficulty_a=5, difficulty_b=20,
-                                    n_gold_users=0, gold_user_err=-5):
+                                    n_gold_users=0,
+                                    sim_gold_user_err=0.01,
+                                    model_gold_user_err=-4):
         err_rates = self.sim_uerr_fn(uerr_a, uerr_b, n_users)
-        err_rates[:n_gold_users] = gold_user_err # first n_gold assumed to be gold
+        err_rates[:n_gold_users] = sim_gold_user_err # first n_gold assumed to be gold
         difficulty_dict = self.sim_diff_fn(difficulty_a, difficulty_b)
         stan_data = self.create_stan_data(n_users=n_users, pct_items=pct_items, err_rates=err_rates, difficulty_dict=difficulty_dict)
         stan_data["NDATA"] = len(stan_data["distances"])
         stan_data["NITEMS"] = np.max(np.unique(stan_data["items"]))
         stan_data["NUSERS"] = len(err_rates)
         stan_data["n_gold_users"] = n_gold_users
-        stan_data["gold_user_err"] = gold_user_err
+        stan_data["gold_user_err"] = model_gold_user_err
         return stan_data

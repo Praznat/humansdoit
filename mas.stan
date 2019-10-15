@@ -78,7 +78,7 @@ transformed parameters {
     }
 }
 model {
-    sigma ~ exponential(1);
+    // sigma ~ exponential(1);
     uerr_Z ~ normal(uerr_prior_loc, uerr_prior_scale);
     diff_Z ~ normal(diff_prior_loc, diff_prior_scale);
     disc_Z ~ normal(disc_prior_loc, disc_prior_scale);

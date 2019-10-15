@@ -50,6 +50,7 @@ def calc_distances_foritem(idf, compare_fn, label_colname, item_colname, uid_col
         u1s.append(u1)
         u2s.append(u2)
         distances.append(distance)
+    distances /= 2
     distances = np.array(distances) + (.1 - np.min(distances))
     return {
         "items":np.array(items) + 1,

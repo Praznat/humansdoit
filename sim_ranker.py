@@ -39,10 +39,11 @@ def create_user_data(uid, df, pct_topics, u_err, difficulty_dict=None, extraarg=
         idf = df[df.topic_item == item]
         idflen = len(idf)
         # err_mu = u_err
-        err_mu = np.random.normal(0, u_err, idflen)
+        i_difficulty = difficulty_dict.get(item)
+        err_mu = np.random.normal(0, u_err * i_difficulty, idflen)
         if difficulty_dict is not None:
             i_difficulty = difficulty_dict.get(item)
-            err_mu *= np.exp(np.random.normal(i_difficulty, NOISE, idflen))
+            # err_mu *= np.exp(np.random.normal(i_difficulty, NOISE, idflen))
             # err_mu += i_difficulty
         # err_mu *= (1 if np.random.random() < 0.5 else -1)
         # print("***", err_mu[:10])
@@ -98,12 +99,20 @@ class RankerSimulator(simulation.Simulator):
         stan_data = utils.calc_distances(self.sim_df, (lambda x,y: 1 - kendaltauscore(x, y)), label_colname="rankings", item_colname="topic_item")
         return stan_data
 
+    # def sim_uerr_fn(self, uerr_a, uerr_b, n_users):
+    #     return np.random.lognormal(uerr_a, uerr_b, n_users)
+
     def sim_uerr_fn(self, uerr_a, uerr_b, n_users):
-        return np.random.lognormal(uerr_a, uerr_b, n_users)
+        z = 5 * np.random.beta(uerr_a, uerr_b, 10000)
+        return np.quantile(z, np.linspace(0,1,n_users+2)[1:-1])
+        # return np.random.beta(uerr_a, uerr_b, n_users)
     
     def sim_diff_fn(self, difficulty_a, difficulty_b):
-        _, difficulty_dict = simulation.create_item_param_dicts(self.df.topic_item, 1, 1, difficulty_a, difficulty_b)
-        return difficulty_dict
+        z = 1 * np.random.beta(difficulty_a, difficulty_b, 10000)
+        n_items = len(self.df.topic_item.unique())
+        return dict(zip(np.arange(n_items), np.quantile(z, np.linspace(0,1,n_items+2)[1:-1])))
+        # _, difficulty_dict = simulation.create_item_param_dicts(self.df.topic_item, 1, 1, difficulty_a, difficulty_b)
+        # return difficulty_dict
 
     # def create_stan_data_scenario(self, n_users=20, pct_items=0.5, uerr_loc=-1.0, uerr_scale=0.5, difficulty_a=-2.0, difficulty_b=0.8,
     #                                 n_gold_users=0, gold_user_err=0.01):

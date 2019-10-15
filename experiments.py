@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
+import seaborn as sns
 from scipy.stats import ttest_rel as ttest
 from sim_normvec import VectorSimulator, euclidist
 from sim_parser import ParserSimulator, ParsableStr, evalb
@@ -57,7 +58,7 @@ def scatter_corr(pred_vals, true_vals, jitter=False, title=None, log=False):
     else:
         plt.scatter(np.array(pred_vals) + noise(), np.array(true_vals) + noise(), s=1)
     if title is not None:
-        plt.title(title)
+        plt.title(title) 
     if log:
         plt.xscale("log")
         plt.yscale("log")
@@ -65,14 +66,44 @@ def scatter_corr(pred_vals, true_vals, jitter=False, title=None, log=False):
     print(np.corrcoef(pred_vals, true_vals))
 
 def diagnostics(opt, stan_data):
+    plt.rcParams.update({'font.size': 20})
+
     plt.scatter(opt["pred_distances"], stan_data["distances"])
     plt.xlabel("pred_distances")
     plt.ylabel("distances")
     plt.show()
     uerr_b = uerr_baseline(stan_data)
+
+    # fig, ax = plt.subplots()
+    # fs = 24
+    # ax.set_xlabel("Inferred $\gamma$", fontsize=fs)
+    # ax.set_ylabel("User mean distance", fontsize=fs)
+    # ax.tick_params(axis='both', which='major', labelsize=fs)
+    # uerr_b = uerr_baseline(stan_data)
+    # gammas = opt["uerr"]
+    # gammas = (gammas) / np.max(gammas)
+    # ax.scatter(gammas, uerr_b)
+    # ax.set_xlim([0,1.1])
+    # ax.set_ylim([0.15,0.45])
+    # plt.show()
+
     plt.scatter(opt["uerr"], uerr_b)
-    plt.xlabel("inferred uerr")
-    plt.ylabel("avg user distance")
+    plt.xlabel("inferred $\gamma$")
+    plt.ylabel("user average distance")
+    plt.ylim()
+    plt.show()
+
+    # sns.set(font_scale=2)
+    # sns.set(style="white", color_codes=True)
+    # jp = sns.jointplot(x=opt["uerr"], y=uerr_b.values)
+    # jp.set_axis_labels("inferred $\gamma$", "user average distance")
+    # plt.show()
+
+    diff = diff_baseline(stan_data)
+    diffkeys = diff.index.values - 1
+    plt.scatter(opt["disc"][diffkeys], diff)
+    plt.xlabel("inferred diff")
+    plt.ylabel("avg item distance")
     plt.show()
     # plt.title("uerr")
     # plt.hist(opt["uerr"])
@@ -102,6 +133,7 @@ def get_model_user_rankings(opt, debug=False):
     tmp = errs[0][result[0]]
     assert tmp[0] <= tmp[1]
     if debug:
+        plt.figure(figsize=(8,4))
         errs[errs==666] = np.max(errs[errs<666]) * 1.1 # reset high-error value for better viz
         plt.imshow(errs.T, cmap='coolwarm', interpolation='nearest')
         plt.xlabel("items")
@@ -200,33 +232,58 @@ class Experiment():
         self.simulator = None
         self.annodf = None
         self.badness_threshold = 0
+        self.extra_baseline_labels = {}
 
-    def train(self, use_diff=0, use_disc=1, dim_size=8, iter=500, **kwargs):
+    def produce_stan_data(self):
+        self.stan_data = utils.calc_distances(self.annodf, self.distance_fn, label_colname=self.label_colname, item_colname=self.item_colname, uid_colname=self.uid_colname)
+
+    def train(self, use_diff=0, use_disc=1, norm_ratio=1, dim_size=8, iter=500, init_diff=True, **kwargs):
         if self.stan_data is None:
             raise ValueError("Must setup stan_data first")
-        stan_model = utils.stanmodel("mas", overwrite=False)
+        stan_model = utils.stanmodel("mas0", overwrite=False)
         self.stan_data["use_diff"] = use_diff
         self.stan_data["use_disc"] = use_disc
         self.stan_data["use_norm"] = 1
-        self.stan_data["norm_ratio"] = 1
+        self.stan_data["norm_ratio"] = norm_ratio
         self.stan_data["DIM_SIZE"] = dim_size
         self.stan_data["eps_limit"] = 3
         self.stan_data["uerr_prior_scale"] = 1
         self.stan_data["diff_prior_scale"] = 1
         self.stan_data["disc_prior_scale"] = 1
+        self.stan_data["uerr_prior_loc_scale"] = 8
+        self.stan_data["diff_prior_loc_scale"] = 8
+        self.stan_data["disc_prior_loc_scale"] = 8
         self.stan_data["err_scale"] = 0.1
+        uerr_b = uerr_baseline(self.stan_data).values
+        init = {
+            # "uerr_Z": uerr_b - np.mean(uerr_b),
+            # "disc_Z": np.zeros(self.stan_data["NITEMS"])
+        }
+
+        if init_diff:
+            diff_b = diff_baseline(self.stan_data)
+            diff_z = diff_b - diff_b.mean()
+            diff_z = [diff_z.get(i+1) or 0 for i in range(self.stan_data["NITEMS"])]
+            init["disc_Z"] = np.array(diff_z) / 10
+            init["uerr_prior_loc"] = 0
+            init["diff_prior_loc"] = 0
+            init["disc_prior_loc"] = 0
+
         self.stan_data = {**self.stan_data, **kwargs}
-        self.opt = stan_model.optimizing(data=self.stan_data, verbose=True, iter=iter)
+        self.opt = stan_model.optimizing(data=self.stan_data, init=init, verbose=True, iter=iter)
         print("sigma", self.opt["sigma"])
     def eval_model(self, random_scores, model_preds, modelname, num_samples):
         print(modelname)
         model_scores = eval_preds(model_preds, self.golddict, self.eval_fn)
         model_scores *= num_samples
         eval_scores_vs(random_scores, model_scores, self.badness_threshold)
+    
+    def register_baseline(self, name, label_dict):
+        self.extra_baseline_labels[name] = label_dict
 
     def test(self, num_samples=5, debug=False, **kwargs):
-        if self.simulator is not None:
-            self.annodf = self.simulator.sim_df
+        # if self.simulator is not None:
+        #     self.annodf = self.simulator.sim_df
         if self.annodf is None:
             raise ValueError("Must set annodf or create simulator")
         if self.opt is None:
@@ -244,6 +301,9 @@ class Experiment():
         self.eval_model(random_scores, self.bau_preds, "BEST AVAILABLE USER", num_samples)
         self.eval_model(random_scores, self.sad_preds, "SMALLEST AVERAGE DISTANCE", num_samples)
         self.eval_model(random_scores, self.mas_preds, "MULTIDIMENSIONAL ANNOTATION SCALING", num_samples)
+        if hasattr(self, "extra_baseline_labels"):
+            for baseline_name, baseline_preds in self.extra_baseline_labels.items():
+                self.eval_model(random_scores, baseline_preds, baseline_name, num_samples)
         self.eval_model(random_scores, self.oracle_preds, "ORACLE", num_samples)
         if debug:
             if kwargs.get("diagnose_vs_sim") and self.simulator is not None:
@@ -251,28 +311,36 @@ class Experiment():
             else:
                 diagnostics(self.opt, self.stan_data)
 
-    def debug(self, plot_stress=False, plot_vs_sad=False, plot_vs_gold=False):
+    def debug(self, plot_stress=False, plot_vs_sad=False, plot_vs_gold=False, skip_miniplots=False):
         from sklearn.decomposition import PCA
         def userset(data):
             result = set(data["u1s"]).union(set(data["u2s"]))
             return result
         sddf = pd.DataFrame(self.stan_data)
         item_userset = sddf.groupby("items").apply(userset)
+        bau = uerr_baseline(self.stan_data)
         map_corrs = []
         map_scores_all = []
         sad_corrs = []
         sad_scores_all = []
+        bau_corrs = []
+        bau_scores_all = []
         gold_scores_all = []
         for i, iue in enumerate(self.opt["item_user_errors"]):
+            gold = self.golddict.get(i)
+            if gold is None:
+                continue
             users = item_userset.get(i+1)
-            if users is None or len(users) < 3:
+            if users is None or len(users) < 2:
                 continue
             dist_from_truth = self.opt["dist_from_truth"][i]
-            print("item", str(i+1))
             iu_distances = sddf[sddf["items"]==i+1][["u1s", "u2s", "distances"]]
-            print(iu_distances)
+            if not skip_miniplots:
+                print("item", str(i+1))
+                print(iu_distances)
             sad = uerr_baseline(iu_distances)
             sad_scores = [sad.loc[u] for u in users]
+            bau_scores = [bau.loc[u] for u in users]
             # if len(iue[0]) > 2:
             #     all_embeddings = PCA(n_components=2).fit_transform(iue)
             # embeddings = np.array([all_embeddings[u-1] for u in users])
@@ -288,20 +356,25 @@ class Experiment():
 
             if plot_vs_gold:
                 labels = [idf[idf[self.uid_colname] == [u-1]][self.label_colname].values[0] for u in users]
-                gold = self.golddict.get(i)
+                
                 if gold is not None:
                     gold_scores = [self.eval_fn(gold, label) for label in labels]
                 else:
                     continue
                     gold_scores = np.nan * np.zeros(len(labels))
-                plt.scatter(map_scores, gold_scores)
-                plt.scatter(sad_scores, gold_scores, color="red")
-                plt.show()
+                if not skip_miniplots:
+                    disc = self.opt["disc"][i]
+                    plt.scatter(map_scores, gold_scores)
+                    plt.scatter(sad_scores, gold_scores, color="red")
+                    plt.title(disc)
+                    plt.show()
                 try:
-                    map_corrs.append(np.corrcoef(map_scores, gold_scores)[0,1])
-                    sad_corrs.append(np.corrcoef(sad_scores, gold_scores)[0,1])
+                    # map_corrs.append(np.corrcoef(map_scores, gold_scores)[0,1])
+                    # sad_corrs.append(np.corrcoef(sad_scores, gold_scores)[0,1])
+                    # bau_corrs.append(np.corrcoef(bau_scores, gold_scores)[0,1])
                     map_scores_all += map_scores
                     sad_scores_all += sad_scores
+                    bau_scores_all += bau_scores
                     gold_scores_all += gold_scores
                 except:
                     pass
@@ -317,29 +390,30 @@ class Experiment():
                     cmap = plt.cm.Reds if stress > 0 else plt.cm.Greens
                     plt.plot(embs[0], embs[1], color=cmap(10*stress))
 
-            # plt.scatter(embeddings[:,0], embeddings[:,1])
-            for ui, emb in enumerate(embeddings):
-                plt.plot([0,emb[0]], [0,emb[1]], "b-")
-                if plot_vs_gold:
-                    pltanno = str(np.round(gold_scores[ui],2))
-                else:
-                    pltanno = str(list(users)[ui]) + ":" + str(np.round(map_scores[ui],2)) + ":" + str(np.round(skills[ui],2))
-                plt.annotate(pltanno, emb)
+            if not skip_miniplots:
+                # plt.scatter(embeddings[:,0], embeddings[:,1])
+                for ui, emb in enumerate(embeddings):
+                    plt.plot([0,emb[0]], [0,emb[1]], "b-")
+                    if plot_vs_gold:
+                        pltanno = str(np.round(gold_scores[ui],2))
+                    else:
+                        pltanno = str(list(users)[ui]) + ":" + str(np.round(map_scores[ui],2)) + ":" + str(np.round(skills[ui],2))
+                    plt.annotate(pltanno, emb)
 
-            def plot_pred(preds, marker, color, size=50):
-                this_pred = preds.get(i)
-                this_uid = idf[[np.array_equal(v, this_pred) for v in idf[self.label_colname]]][self.uid_colname].values[0]
-                this_ui = np.where(np.array([u-1 for u in users]) == this_uid)[0][0]
-                this_emb = embeddings[this_ui]
-                plt.scatter([this_emb[0]], [this_emb[1]], marker=marker, c=color, s=size)
-            plot_pred(self.oracle_preds, "o", "gold", 100)
-            plot_pred(self.mas_preds, "d", "red")
-            plot_pred(self.bau_preds, "+", "black")
-            plot_pred(self.sad_preds, "x", "black")
+                def plot_pred(preds, marker, color, size=50):
+                    this_pred = preds.get(i)
+                    this_uid = idf[[np.array_equal(v, this_pred) for v in idf[self.label_colname]]][self.uid_colname].values[0]
+                    this_ui = np.where(np.array([u-1 for u in users]) == this_uid)[0][0]
+                    this_emb = embeddings[this_ui]
+                    plt.scatter([this_emb[0]], [this_emb[1]], marker=marker, c=color, s=size)
+                plot_pred(self.oracle_preds, "o", "gold", 100)
+                plot_pred(self.mas_preds, "d", "red")
+                plot_pred(self.bau_preds, "+", "black")
+                plot_pred(self.sad_preds, "x", "black")
 
-            plt.xlim(-scale, scale)
-            plt.ylim(-scale, scale)
-            plt.show()
+                plt.xlim(-scale, scale)
+                plt.ylim(-scale, scale)
+                plt.show()
 
             if plot_vs_sad:
                 plt.scatter(map_scores, sad_scores)
@@ -347,18 +421,58 @@ class Experiment():
                 print("SAD vs MAS: ", self.sad_preds.get(i), self.mas_preds.get(i))
         
         if plot_vs_gold:
-            plt.hist(sad_corrs)
-            plt.show()
-            print("sad", np.mean(sad_corrs))
-            plt.hist(map_corrs)
-            plt.show()
-            print("map", np.mean(map_corrs))
+            # plt.hist(sad_corrs)
+            # plt.show()
+            # print("sad", np.mean(sad_corrs))
+            # plt.hist(map_corrs)
+            # plt.show()
+            # print("map", np.mean(map_corrs))
             plt.scatter(map_scores_all, gold_scores_all)
             plt.scatter(sad_scores_all, gold_scores_all, color="r")
+            plt.scatter(bau_scores_all, gold_scores_all, color="y")
             plt.show()
             print("\n ALL")
-            print("sad", np.corrcoef(sad_scores_all, gold_scores_all)[0,1])
-            print("map", np.corrcoef(map_scores_all, gold_scores_all)[0,1])
+            print("ru", 0, np.std(gold_scores_all))
+            print("bau", np.corrcoef(bau_scores_all, gold_scores_all)[0,1], np.std((1 - np.array(bau_scores_all)) - np.array(gold_scores_all)))
+            print("sad", np.corrcoef(sad_scores_all, gold_scores_all)[0,1], np.std((1 - np.array(sad_scores_all)) - np.array(gold_scores_all)))
+            print("mas", np.corrcoef(map_scores_all, gold_scores_all)[0,1], np.std((1 - np.array(map_scores_all)) - np.array(gold_scores_all)))
+
+            fig, ax = plt.subplots()
+            ax.scatter(1.1-np.array(map_scores_all), gold_scores_all)
+            fs = 24
+            # fig.suptitle('Score-all evaluation example', fontsize=fs)
+            ax.set_xlabel("1 - MAS $\\varepsilon$ scores", fontsize=fs)
+            ax.set_ylabel("Gold scores", fontsize=fs)
+            ax.tick_params(axis='both', which='major', labelsize=fs)
+            plt.show()
+
+            # sns.set(font_scale=2)
+            # sns.set(style="white", color_codes=True)
+            # jp = sns.jointplot(x=1.1-np.array(map_scores_all), y=gold_scores_all)
+            # jp.set_axis_labels("1 - MAS $\\varepsilon$", "gold score")
+            # plt.show()
+
+    def describe(self):
+        nusers = self.stan_data["NUSERS"]
+        nitems = self.stan_data["NITEMS"]
+        nlabels = len(self.annodf)
+        ulabels = self.annodf.groupby(self.uid_colname).count()[self.label_colname].values
+        ilabels = self.annodf.groupby(self.item_colname).count()[self.label_colname].values
+        lperu = str(np.mean(ulabels).round(2)) + "$\pm$" + str(2 * np.std(ulabels).round(2))
+        lperi = str(np.mean(ilabels).round(2)) + "$\pm$" + str(2 * np.std(ilabels).round(2))
+
+        self.annodf["labelstr"] = self.annodf[self.label_colname].astype(str)
+        label_occurrences = self.annodf.groupby([self.item_colname, "labelstr"]).count()[self.label_colname].values
+        dupes = np.sum(label_occurrences > 1)
+
+        cols = [nusers, nitems, nlabels, lperu, lperi, dupes]
+        print(" & ".join(map(str, cols)))
+
+    def remove_supervised(self, ngoldu):
+        if ngoldu > 0:
+            goldi = self.annodf[self.annodf[self.uid_colname] < ngoldu][self.item_colname].unique()
+            for i in goldi:
+                del self.golddict[i]
     
     def run_square(self, squaredir="square-2.0/"):
         if self.annodf is None:
@@ -414,15 +528,29 @@ class ParserExperiment(Experiment):
         # TODO these are not true golds!
         gold_parses = [self.BLLIP.parse_one(ParsableStr(s)) for s in self.simulator.df.tokens.values]
         self.golddict = dict(enumerate(gold_parses))
+        self.annodf = self.simulator.sim_df
+        self.remove_supervised(ngoldu)
 
 def setup_parser_manyusers(parser_experiment):
-    parser_experiment.setup(num_items=50, n_users=30, pct_items=0.2)
+    parser_experiment.setup(num_items=100, n_users=30, pct_items=0.2)
 
 def setup_parser_manyusers_hiuerr(parser_experiment):
-    parser_experiment.setup(num_items=50, n_users=30, pct_items=0.2, uerr_a=2, uerr_b=3)
+    parser_experiment.setup(num_items=100, n_users=30, pct_items=0.2, uerr_a=2, uerr_b=3)
 
-def setup_parser_manyusers_hiuerr_somegold(parser_experiment):
-    parser_experiment.setup(num_items=50, n_users=30, pct_items=0.2, uerr_a=2, uerr_b=3, ngoldu=5)
+def setup_parser_manyusers_unsparser(parser_experiment):
+    parser_experiment.setup(num_items=100, n_users=30, pct_items=0.5)
+
+def setup_parser_manyusers_hiuerr_unsparser(parser_experiment):
+    parser_experiment.setup(num_items=100, n_users=30, pct_items=0.5, uerr_a=2, uerr_b=3)
+
+
+
+def setup_parser_manyusers_noisy(parser_experiment):
+    parser_experiment.setup(num_items=100, n_users=30, pct_items=0.2, difficulty_a=1, difficulty_b=3)
+
+def setup_parser_manyusers_hiuerr_noisy(parser_experiment):
+    parser_experiment.setup(num_items=100, n_users=30, pct_items=0.2, uerr_a=1, uerr_b=1, difficulty_a=1, difficulty_b=3)
+
     
 def setup_parser_fewusers(parser_experiment):
     parser_experiment.setup(num_items=50, n_users=10, pct_items=0.6)
@@ -454,11 +582,13 @@ class RankerExperiment(Experiment):
                                                     difficulty_a=difficulty_a, difficulty_b=difficulty_b,
                                                     n_gold_users=ngoldu)
         self.golddict = self.simulator.gold.to_dict()
+        self.annodf = self.simulator.sim_df
+        self.remove_supervised(ngoldu)
     def setup_standard(self):
         self.setup(n_items=100, n_users=20, pct_items=0.2, uerr_a=-1.0, uerr_b=0.8, difficulty_a=-2.0, difficulty_b=1.3, ngoldu=0)
 
 def setup_ranker_manyusers_hiuerr_lodiff(ranker_experiment):
-    ranker_experiment.setup(n_items=100, n_users=30, pct_items=0.2, uerr_a=-1.5, uerr_b=.6, difficulty_a=-30.0, difficulty_b=.1)
+    ranker_experiment.setup(n_items=100, n_users=30, pct_items=0.2, uerr_a=1, uerr_b=1, difficulty_a=1, difficulty_b=1)
     
 def setup_ranker_fewusers_hiuerr_lodiff(ranker_experiment):
     ranker_experiment.setup(n_items=100, n_users=10, pct_items=0.6, uerr_a=-2, uerr_b=.5, difficulty_a=-3.0, difficulty_b=.1)
@@ -525,36 +655,71 @@ class RealExperiment(Experiment):
         golddf = utils.translate_categorical(golddf, self.item_colname, itemdict)
         self.golddict = golddf.set_index("item").to_dict()[self.label_colname]
         self.produce_stan_data()
-    def set_supervised_labels(self, n_supervised_items, apply_fn=lambda x:x, model_gold_err=-4):
-        if n_supervised_items == 0:
-            self.produce_stan_data()
-            return
-        assert self.golddict is not None
-        self.supervised_items = np.random.choice(list(self.golddict.keys()), n_supervised_items, replace=False)
-        supervised_labels = [apply_fn(self.golddict.get(item)) for item in self.supervised_items]
-        supervised_df = pd.DataFrame({
-            self.uid_colname:np.zeros(n_supervised_items, dtype=int),
-            self.item_colname:self.supervised_items,
-            self.label_colname:supervised_labels
-            })
-        self.annodf = self.annodf.copy()
-        self.annodf[self.uid_colname] += 1
-        self.annodf = pd.concat([supervised_df, self.annodf], sort=True).sort_values(self.uid_colname)
-        self.produce_stan_data()
-        self.stan_data["n_gold_users"] = 1
-        self.stan_data["gold_user_err"] = model_gold_err
-        for item in self.supervised_items:
-            del self.golddict[item]
+    # def set_supervised_labels(self, n_supervised_items, apply_fn=lambda x:x, model_gold_err=-4):
+    #     set_supervised_labels(self, n_supervised_items, apply_fn, model_gold_err)
+        # if n_supervised_items == 0:
+        #     self.produce_stan_data()
+        #     return
+        # assert self.golddict is not None
+        # self.supervised_items = np.random.choice(list(self.golddict.keys()), n_supervised_items, replace=False)
+        # supervised_labels = [apply_fn(self.golddict.get(item)) for item in self.supervised_items]
+        # supervised_df = pd.DataFrame({
+        #     self.uid_colname:np.zeros(n_supervised_items, dtype=int),
+        #     self.item_colname:self.supervised_items,
+        #     self.label_colname:supervised_labels
+        #     })
+        # self.annodf = self.annodf.copy()
+        # self.annodf[self.uid_colname] += 1
+        # self.annodf = pd.concat([supervised_df, self.annodf], sort=True).sort_values(self.uid_colname)
+        # self.produce_stan_data()
+        # self.stan_data["n_gold_users"] = 1
+        # self.stan_data["gold_user_err"] = model_gold_err
+        # self.golddict = self.golddict.copy()
+        # for item in self.supervised_items:
+        #     del self.golddict[item]
 
 class CategoricalExperiment(RealExperiment):
     def __init__(self):
         super().__init__(distance_fn=lambda x, y: (1 if x == y else 0))
 
 
+# semi-supervised learning
+
+def set_supervised_items(expermnt, n_supervised_items, apply_fn=lambda x:x, randomize=False):
+    most_annotated_items = expermnt.annodf.groupby(expermnt.item_colname).count()[expermnt.label_colname].sort_values(ascending=False)
+    expermnt.supervised_items = most_annotated_items.index.values[:n_supervised_items]
+    if randomize:
+        np.random.shuffle(expermnt.supervised_items)
+    expermnt.supervised_labels = [apply_fn(expermnt.golddict.get(item)) for item in expermnt.supervised_items]
+    assert expermnt.golddict is not None
+    expermnt.golddict = expermnt.golddict.copy()
+    for item in expermnt.supervised_items:
+        try:
+            del expermnt.golddict[item]
+        except:
+            pass
+
+def make_supervised_standata(expermnt, model_gold_err=-4):
+    # if n_supervised_items == 0:
+    #     expermnt.produce_stan_data()
+    #     return
+    assert expermnt.golddict is not None
+    
+    supervised_df = pd.DataFrame({
+        expermnt.uid_colname:np.zeros(len(expermnt.supervised_items), dtype=int),
+        expermnt.item_colname:expermnt.supervised_items,
+        expermnt.label_colname:expermnt.supervised_labels
+        })
+    expermnt.annodf = expermnt.annodf.copy()
+    expermnt.annodf[expermnt.uid_colname] += 1
+    expermnt.annodf = pd.concat([supervised_df, expermnt.annodf], sort=True).sort_values(expermnt.uid_colname)
+    expermnt.produce_stan_data()
+    expermnt.stan_data["n_gold_users"] = 1
+    expermnt.stan_data["gold_user_err"] = model_gold_err
 
 
 # STUFF TO DO
 
-"1. check that pooled uerr param MAS works same as SAD"
-"2. check that 100% gold users results in perfect oracle score"
-"3. visualize BAU, SAD, MAS, ORACLE points in 2D"
+# "1. check that pooled uerr param MAS works same as SAD"
+# "2. check that 100% gold users results in perfect oracle score"
+# "3. visualize BAU, SAD, MAS, ORACLE points in 2D"

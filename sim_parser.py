@@ -94,7 +94,9 @@ class ParserSimulator(simulation.Simulator):
         return stan_data
     
     def sim_uerr_fn(self, uerr_a, uerr_b, n_users):
-        return np.random.beta(uerr_a, uerr_b, n_users)
+        z = np.random.beta(uerr_a, uerr_b, 10000)
+        return np.quantile(z, np.linspace(0,1,n_users+2)[1:-1])
+        # return np.random.beta(uerr_a, uerr_b, n_users)
 
     def sim_diff_fn(self, difficulty_a, difficulty_b):
         difficulty_dict, _ = simulation.create_item_param_dicts(self.df.sentenceId, difficulty_a, difficulty_b, 0, 0)
